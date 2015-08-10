@@ -1,0 +1,6 @@
+tableName1
+	field1 int primary key autoincrement
+	field2 String
+tableName2
+	field1 int
+	field2 int
