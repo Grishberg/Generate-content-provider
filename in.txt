@@ -1,6 +1,12 @@
-tableName1
-	field1 int primary key autoincrement
-	field2 String
-tableName2
-	field1 int
-	field2 int
+folder
+	hashtag String
+	name String
+users
+	id String
+	
+image
+	id String
+	created_time long
+	thumbnail String
+	standard_resolution String
+	caption String

@@ -7,9 +7,37 @@ class Generator:
     def __init__(self, rootPackage, dbName):
         self.pkg = rootPackage
         self.dbName = dbName
-        self.cwd = os.path.dirname(os.path.abspath(__file__))+"/"
+        self.cwd = os.path.dirname(os.path.abspath(__file__))+"/out/"
+        self.modelsPath = self.cwd+"models/"
+        if not os.path.exists(self.modelsPath): os.makedirs(self.modelsPath)
 
-    def getClassName(self, s):
+    def generateSqlType(self, s):
+        s = s.lower()
+        if s == "string":
+            return "TEXT"
+        elif s == "int":
+            return "INTEGER"
+        elif s == "long":
+            return "INTEGER"
+        elif s == "date":
+            return "INTEGER"
+        elif s == "boolean":
+            return "INTEGER"
+
+    def generateCursorGetter(self, s):
+        s = s.lower()
+        if s == "string":
+            return "getString"
+        elif s == "int":
+            return "getInt"
+        elif s == "long":
+            return "getLong"
+        elif s == "date":
+            return "getLong"
+        elif s == "boolean":
+            return "getInt"
+
+    def generateClassName(self, s):
         out = s[0].upper() + s[1:]
         arr = out.split("_")
         if len(arr) > 0:
@@ -57,6 +85,7 @@ class Generator:
             sOut = sOut.replace("__", "_")
         return sOut.upper()
 
+    # парсинг шаблона с таблицами и полями бд
     def parseTemp(self, inBuffer):
         lst = inBuffer.split("\n")
         tables = []
@@ -75,17 +104,21 @@ class Generator:
                 # fields
                 fieldName = words[0]
                 fieldType = words[1]
+                fieldSqlType = self.generateSqlType(fieldType)
+                varName = self.generateVarName(words[0])
                 fieldConstName =  self.generateConstName(fieldName)
                 fieldParam = ""
                 if len(words) > 2:
                     for i in range(2, len(words)):
                         fieldParam += words[i]+' '
-                fields.append({'name': fieldName, 'type': fieldType, 'param': fieldParam, 'const': fieldConstName})
+                fields.append({'name': fieldName, 'type': fieldType, 'sqlType': fieldSqlType, 'param': fieldParam, 'const': fieldConstName, 'varName':varName})
         if tableName is not None:
             tables.append({"name": tableName, "fields": fields})
         self.generateHelper(tables)
         self.generateContentProvider(tables)
+        self.generateModels(tables)
 
+    # формирование SqlHelper
     def generateHelper(self, tables):
         out = ""
         out += "package " + self.pkg + ";\n\n"
@@ -101,6 +134,7 @@ class Generator:
             out += "\t// " + t["name"] + "\n"
             constTableName = self.generateConstName(t["name"])
             out += "\tpublic static final String TABLE_" + constTableName + ' = "' + t["name"] + '";\n'
+
             for v in t["fields"]:
                 name = v["name"]
                 nameConst = self.generateConstName(name)
@@ -114,10 +148,10 @@ class Generator:
             constTableName = self.generateConstName(tableName)
             out += "\tprivate static final String CREATE_TABLE_"+ constTableName + ' ="" +\n'
             out += '\t\t"CREATE TABLE "+'+constTableName + ' "("+\n'
-
+            out += '\t\tCOLUMN_ID + " integer primary key," +\n'
             for i in range(0, len(fields)):
                 field = fields[i]
-                out += '\t\t' + field['const'] + ' + " ' + field['param']
+                out += '\t\t' + field['const'] + ' + " ' + field['sqlType'] + " " + field['param']
                 if i < len(fields) - 1:
                     out += ","
                 out += '" +\n'
@@ -168,7 +202,8 @@ class Generator:
         f.write(out)
         f.close()
 
-    def generateContentProvider(self,tables):
+    # формирование контент провайдера
+    def generateContentProviderImport(self, tables):
         out = "import "+ self.pkg + ";\n"
         out += "import android.content.ContentProvider;\n"
         out += "import android.content.ContentUris;\n"
@@ -219,7 +254,7 @@ class Generator:
         out+='\t\t\tdbHelper = new DbHelper(context);\n'
         out += '\t\t}\n'
         out += '\t\treturn dbHelper;\n'
-        out += '\t}\n'
+        out += '\t}\n\n'
 
         out +='\n'
         out +='\t@Override\n'
@@ -228,14 +263,184 @@ class Generator:
         out +='\t\treturn true;\n'
         out +='\t}\n'
 
+        # parseUri
+        out +='\tprivate String parseUri(Uri uri) {\n'
+        out +='\t\treturn parseUri(URI_MATCHER.match(uri));\n'
+        out +='\t}\n\n'
+
+        # parseUri
+        out +='\tprivate String parseUri(int match) {\n'
+        out +='\t\tString table = null;\n'
+        out +='\t\tswitch (match) {\n'
+        for t in tables:
+            tableName = t["name"]
+            constTableName = self.generateConstName(tableName)
+            out += '\t\t\tcase CODE_'+constTableName+ ':\n'
+            out += '\t\t\t\ttable = dbHelper.TABLE_' + constTableName+ ';\n'
+            out += '\t\t\t\tbreak;\n'
+
+        out += '\t\t\tdefault:\n'
+        out += '\t\t\t\tthrow new IllegalArgumentException("Invalid DB code: " + match);\n'
+        out +="\t\t}\n"
+        out +="\t\treturn table;\n"
+        out +='\t}\n\n'
+
+
+        return out
+
+    def generateQuery(self, tables):
+        out = ""
+        out += "\t@Override\n"
+        out += "\tpublic Cursor query(Uri uri, String[] projection, String selection\n" \
+               "\t\t, String[] selectionArgs, String sortOrder) {\n"
+        out += "\t\tint uriId = URI_MATCHER.match(uri);\n"
+        out += "\t\tCursor cursor = null;\n"
+        out += '\t\tswitch(uriId){\n'
+        for t in tables:
+            tableName = t["name"]
+            constTableName = self.generateConstName(tableName)
+            out += '\t\t\tcase CODE_' + constTableName + ':\n'
+            out += '\t\t\t\tcursor = dbHelper.getReadableDatabase()\n'
+            out += '\t\t\t\t\t.query(DbHelper.TABLE_' + constTableName+ ', projection, selection\n'
+            out += '\t\t\t\t\t,selectionArgs, null, null, sortOrder);\n'
+            out += '\t\t\t\tbreak;\n'
+
+        out += '\t\t\tdefault:\n'
+        out += '\t\t\t\tthrow new IllegalArgumentException("Invalid DB code: " + match);\n'
+        out += "\t\t}\n"
+
+        out += "\t\tcursor.setNotificationUri(getContext().getContentResolver(), uri);\n"
+        out += "\t\treturn cursor;\n"
+        out += "\t}\n\n"
+        return out
+
+    def generateInsert(self, tables):
+        out = ""
+        out += "\t@Override\n"
+        out += "\tpublic Uri insert(Uri uri, ContentValues values) {\n"
+        out += "\t\t//int uriId = URI_MATCHER.match(uri);\n"
+        out += "\t\tString table = parseUri(uri);\n"
+        out += "\t\tSQLiteDatabase db = dbHelper.getWritableDatabase();\n"
+        out += "\t\tlong id = insertOrUpdateById(db,uri,table,values,DbHelper.COLUMN_ID);\n"
+        out += "\t\tUri resultUri = ContentUris.withAppendedId(uri, id);\n"
+        out += "\t\tgetContext().getContentResolver().notifyChange(resultUri, null);\n"
+        out += "\t\treturn resultUri;\n"
+        out += "\t}\n\n"
+        return out
+
+    def generateUpdate(self, tables):
+        out = ""
+        out += "\t@Override\n"
+        out += "\tpublic int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {\n"
+        out += "\t\tint result = 0;\n"
+        out += "\t\t//int uriId = URI_MATCHER.match(uri);\n"
+        out += "\t\tString table = parseUri(uri);\n"
+        out += "\t\tSQLiteDatabase db = dbHelper.getWritableDatabase();\n"
+        out += "\t\tresult	= db.update(table, values, selection, selectionArgs);\n"
+        out += "\t\tgetContext().getContentResolver().notifyChange(uri, null);\n"
+        out += "\t\treturn resultUri;\n"
+        out += "\t}\n\n"
+        return out
+
+    def generateDelete(self, tables):
+        out = ""
+        out += "\t@Override\n"
+        out += "\tpublic int delete(Uri uri, String selection, String[] selectionArgs) {\n"
+        out += "\t\tint result = 0;\n"
+        out += "\t\t//int uriId = URI_MATCHER.match(uri);\n"
+        out += "\t\tString table = parseUri(uri);\n"
+        out += "\t\tSQLiteDatabase db = dbHelper.getWritableDatabase();\n"
+        out += "\t\tresult = db.delete(table, selection, selectionArgs);\n"
+        out += "\t\tgetContext().getContentResolver().notifyChange(uri, null);\n"
+        out += "\t\treturn resultUri;\n"
+        out += "\t}\n\n"
+        return out
+
+
+    def generateInserOrUpdate(self):
+        out = ""
+        out += "\t@Override\n"
+        out += "\tprivate long insertOrUpdateById(SQLiteDatabase db, Uri uri, String table,\n"
+        out += "\t\tContentValues values, String column) throws SQLiteConstraintException{\n"
+        out += "\t\tlong result	= -1;\n"
+        out += "\t\ttry {\n"
+        out += "\t\t\tresult = db.insertOrThrow(table, null, values);\n"
+        out += "\t\t} catch (SQLiteConstraintException e) {\n"
+        out += '\t\t\tint nrRows = update(uri, values, column + "=?",\n'
+        out += '\t\t\t\tnew String[]{values.getAsString(column)});\n'
+        out += "\t\t\tif (nrRows == 0) {\n"
+        out += "\t\t\t\tthrow e;\n"
+        out += "\t\t\t}\n"
+        out += "\t\t}\n"
+        out += "\t\treturn result;\n"
+        out += "\t}\n\n"
+        return out
+
+    def generateContentProvider(self, tables):
+        out = ""
+        out += self.generateContentProviderImport(tables)
+        out += self.generateQuery(tables)
+        out += self.generateInsert(tables)
+        out += self.generateUpdate(tables)
+        out += self.generateDelete(tables)
+        out += self.generateInserOrUpdate()
+        out += "}\n"
+
         f = open(self.cwd+"AppContentProvider.java", "w")
         f.write(out)
         f.close()
 
+    def generateModels(self, tables):
+        for t in tables:
+            fields = t['fields']
+            tableName = t['name']
+            className = self.generateClassName(tableName)
+            out = "import " + self.pkg + ".model;\n"
+            out += "import android.content.ContentValues;\n"
+            out += "import android.database.Cursor;\n\n"
+            out += "public class "+className + "{\n"
+            out += '\tprivate long id;\n'
+            for v in t["fields"]:
+                varName = v['varName']
+                out += "\tprivate "+v['type'] + " " + varName + ";\n"
 
+            out += "\n"
+            out += "\tpublic "+className + "(long id\n"
+            for i in range(0, len(fields)):
+                field = fields[i]
+                out += "\t\t\t,"
+                out += field['type'] + ' ' + varName + ""
+            out += " ){\n"
 
-pkg = "com.test.data.db"
-dbName = "test.db"
+            out += '\t\tthis.id = id;\n'
+            for v in t["fields"]:
+                varName = v['varName']
+                out += "\t\tthis." + varName + " = " + varName + ";\n"
+
+            out += "\t}\n"
+
+            out += "\tpublic static " + className + " fromCursor(Cursor c){\n"
+            out += "\t\tint idColId = c.getColumnIndex(DbHelper.COLUMN_ID);\n"
+            for v in t["fields"]:
+                varName = v['varName']
+                out += "\t\tint " + varName + "Id = c.getColumnIndex(DbHelper."+v['const']+");\n"
+
+            out += "\t\treturn new " + className + "( \n"
+            out += '\t\t\tc.getLong(idColId)\n'
+            for i in range(0, len(fields)):
+                v = fields[i]
+                varName = v['varName']
+                out += "\t\t\t,c." + self.generateCursorGetter(v['type']) + "(" +varName + "Id)"
+            out += ");\n"
+            out += "\t}\n"
+
+            out += "}\n"
+            f = open(self.modelsPath+className+".java", "w")
+            f.write(out)
+            f.close()
+
+pkg = "com.grishberg.oauth2test.data.db"
+dbName = "cache.db"
 g = Generator(pkg, dbName)
 
 f = open("in.txt", "r")
