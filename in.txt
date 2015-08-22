@@ -2,10 +2,10 @@ folder
 	hashtag String
 	name String
 users
-	id String
+	user_id String
 	
 image
-	id String
+	image_id String
 	created_time long
 	thumbnail String
 	standard_resolution String
