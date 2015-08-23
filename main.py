@@ -117,11 +117,12 @@ class Generator:
         self.generateHelper(tables)
         self.generateContentProvider(tables)
         self.generateModels(tables)
+        self.generateApp(tables)
 
     # формирование SqlHelper
     def generateHelper(self, tables):
         out = ""
-        out += "package " + self.pkg + ";\n\n"
+        out += "package " + self.pkg + ".data.db;\n\n"
         out += "import android.content.ContentValues;\n"
         out += "import android.content.Context;\n"
         out += "import android.database.sqlite.SQLiteDatabase;\n"
@@ -205,8 +206,8 @@ class Generator:
 
     # формирование контент провайдера
     def generateContentProviderImport(self, tables):
-        out = "package "+ self.pkg + ";\n"
-        out += "import "+ self.pkg + ".DbHelper;\n"
+        out = "package "+ self.pkg + ".data.db;\n"
+        out += "import "+ self.pkg + ".data.db.DbHelper;\n"
         out += "import android.content.ContentProvider;\n"
         out += "import android.content.ContentUris;\n"
         out += "import android.content.ContentValues;\n"
@@ -230,7 +231,7 @@ class Generator:
         for t in tables:
             tableName = t["name"]
             constTableName = self.generateConstName(tableName)
-            out += '\tprivate static final Uri CONTENT_URI_'+constTableName+ \
+            out += '\tpublic static final Uri CONTENT_URI_'+constTableName+ \
                    ' = Uri.parse("content://" + AUTHORITY +"/" +PATH_' + constTableName + ');\n'
         out += '\n'
         #code
@@ -323,10 +324,22 @@ class Generator:
         out = ""
         out += "\t@Override\n"
         out += "\tpublic Uri insert(Uri uri, ContentValues values) {\n"
-        out += "\t\t//int uriId = URI_MATCHER.match(uri);\n"
+        out += "\t\tlong id = -1;\n"
+        out += "\t\tint uriId = URI_MATCHER.match(uri);\n"
         out += "\t\tString table = parseUri(uri);\n"
         out += "\t\tSQLiteDatabase db = dbHelper.getWritableDatabase();\n"
-        out += "\t\tlong id = insertOrUpdateById(db,uri,table,values,DbHelper.COLUMN_ID);\n"
+        out += '\t\tswitch(uriId){\n'
+        for t in tables:
+            tableName = t["name"]
+            constTableName = self.generateConstName(tableName)
+            out += '\t\t\tcase CODE_' + constTableName + ':\n'
+            out += '\t\t\t\tid = db.insert(table, null, values);\n'
+            out += '\t\t\t\t\t.query(DbHelper.TABLE_' + constTableName+ ', projection, selection\n'
+            out += '\t\t\t\t\t,selectionArgs, null, null, sortOrder);\n'
+            out += '\t\t\t\tbreak;\n'
+        out += '\t\t\tdefault:\n'
+        out += '\t\t\t\tid = insertOrUpdateById(db,uri,table,values,DbHelper.COLUMN_ID);\n'
+        out += "\t\t}\n"
         out += "\t\tUri resultUri = ContentUris.withAppendedId(uri, id);\n"
         out += "\t\tgetContext().getContentResolver().notifyChange(resultUri, null);\n"
         out += "\t\treturn resultUri;\n"
@@ -398,9 +411,10 @@ class Generator:
         for t in tables:
             fields = t['fields']
             tableName = t['name']
+            constTableName = self.generateConstName(tableName)
             className = self.generateClassName(tableName)
-            out = "package " + self.pkg + ".model;\n"
-            out += "import " + self.pkg + ".DbHelper;\n"
+            out = "package " + self.pkg + ".data.db.model;\n"
+            out += "import " + self.pkg + ".data.db.DbHelper;\n"
 
             out += "import android.content.ContentValues;\n"
             out += "import android.database.Cursor;\n\n"
@@ -431,7 +445,7 @@ class Generator:
             out += "\t\tint idColId = c.getColumnIndex(DbHelper.COLUMN_ID);\n"
             for v in t["fields"]:
                 varName = v['varName']
-                out += "\t\tint " + varName + "Id = c.getColumnIndex(DbHelper."+v['const']+");\n"
+                out += "\t\tint " + varName + "Id = c.getColumnIndex(DbHelper." + constTableName + "_" + v['const']+");\n"
 
             out += "\t\treturn new " + className + "( \n"
             out += '\t\t\tc.getLong(idColId)\n'
@@ -453,19 +467,74 @@ class Generator:
                 varName = v['varName']
                 constVarName = self.generateConstName(varName)
                 constTableName = self.generateConstName(tableName)
-                out += "\t\tcv.put(DbHelper." + constVarName + ", " + varName +");\n"
+                out += "\t\tcv.put(DbHelper." +constTableName + "_" +  constVarName + ", " + varName +");\n"
             out += "\t\treturn cv;\n"
             out += "\n"
             out += "\t}\n"
-
-
+            out += "\n\t------------- getters ------------\n"
+            # generateGetters
+            for v in t["fields"]:
+                varName = v['varName']
+                out += "\tpublic " + v['type'] +" get" + self.generateClassName(varName) + "(){\n"
+                out += "\t\treturn " + varName + ";\n"
+                out += "\t}\n\n"
 
             out += "}\n"
             f = open(self.modelsPath+className+".java", "w")
             f.write(out)
             f.close()
 
-pkg = "com.grishberg.oauth2test.data.db"
+    #generate App class
+    def generateApp(self, tables):
+        out = ""
+        out = "package " + self.pkg + ";\n\n"
+        out += "import " + self.pkg + ".data.db.DbHelper;\n\n"
+        out += "import android.app.Application;\n"
+        out += "import android.content.Context;\n"
+        out += "import " + self.pkg + ".data.db.AppContentProvider;\n\n"
+
+        for t in tables:
+            tableName = t['name']
+            className = self.generateClassName(tableName)
+            out += "import "+ self.pkg + ".data.db.model." + className + ";\n"
+
+        out += "\nprivate static App mInstance;\n"
+        out += "private static Context mAppContext;\n\n"
+        out += "public class App extends Application {\n"
+        out += "\t@Override\n"
+        out += "\tpublic void onCreate() {\n"
+        out += "\t\tsuper.onCreate();\n"
+        out += "\t\tmInstance = this;\n"
+        out += "\t\tmAppContext = getApplicationContext();\n"
+        out += "\t}\n\n"
+
+        out += "\tpublic static App getInstance() {\n"
+        out += "\t\treturn mInstance;\n"
+        out += "\t}\n\n"
+
+        out += "\tpublic static Context getAppContext() {\n"
+        out += "\t\treturn mAppContext;\n"
+        out += "\t}\n\n"
+
+        for t in tables:
+            fields = t['fields']
+            tableName = t['name']
+            constTableName = self.generateConstName(tableName)
+            className = self.generateClassName(tableName)
+            out += "\tpublic static void insert" + className + "( " + className + " value ){\n"
+            out += "\t\tmAppContext.getContentResolver()\n"
+            out += "\t\t\t.insert(AppContentProvider.CONTENT_URI_"+constTableName + "\n"
+            out += "\t\t\t\t, value.buildContentValues());\n"
+            out += "\t}\n"
+
+        out += "}\n"
+
+        f = open(self.cwd+"App.java", "w")
+        f.write(out)
+        f.close()
+
+
+pkg = "com.grishberg.oauth2test"
 dbName = "cache.db"
 g = Generator(pkg, dbName)
 
