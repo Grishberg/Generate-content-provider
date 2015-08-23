@@ -91,13 +91,14 @@ class Generator:
         tables = []
         tableName = None
         fields = []
+        uniqueField = None
         for row in lst:
             line = row.strip()
             words = line.split(" ")
             if len(line) > 0 and len(words) == 1:
                 # table name
                 if tableName is not None:
-                    tables.append({"name": tableName, "fields": fields})
+                    tables.append({"name": tableName, "fields": fields, "unique": uniqueField})
                 fields = []
                 tableName = line
             elif len(words) > 1:
@@ -106,14 +107,17 @@ class Generator:
                 fieldType = words[1]
                 fieldSqlType = self.generateSqlType(fieldType)
                 varName = self.generateVarName(words[0])
-                fieldConstName =  self.generateConstName(fieldName)
+                fieldConstName = self.generateConstName(fieldName)
                 fieldParam = ""
                 if len(words) > 2:
                     for i in range(2, len(words)):
+                        if words[i].lower() == 'unique':
+                            uniqueField = fieldName
                         fieldParam += words[i]+' '
-                fields.append({'name': fieldName, 'type': fieldType, 'sqlType': fieldSqlType, 'param': fieldParam, 'const': fieldConstName, 'varName':varName})
+                fields.append({'name': fieldName, 'type': fieldType, 'sqlType': fieldSqlType,\
+                               'param': fieldParam, 'const': fieldConstName, 'varName': varName})
         if tableName is not None:
-            tables.append({"name": tableName, "fields": fields})
+            tables.append({"name": tableName, "fields": fields, "unique": uniqueField})
         self.generateHelper(tables)
         self.generateContentProvider(tables)
         self.generateModels(tables)
@@ -331,14 +335,17 @@ class Generator:
         out += '\t\tswitch(uriId){\n'
         for t in tables:
             tableName = t["name"]
+            uniqueField = t["unique"]
             constTableName = self.generateConstName(tableName)
             out += '\t\t\tcase CODE_' + constTableName + ':\n'
-            out += '\t\t\t\tid = db.insert(table, null, values);\n'
-            out += '\t\t\t\t\t.query(DbHelper.TABLE_' + constTableName+ ', projection, selection\n'
-            out += '\t\t\t\t\t,selectionArgs, null, null, sortOrder);\n'
+            if uniqueField != None:
+                out += "\t\t\t\tid = insertOrUpdateById(db,uri,table,values,DbHelper." + constTableName +"_"+\
+                       self.generateConstName(uniqueField) + ");\n"
+            else:
+                out += '\t\t\t\tid = db.insert(table, null, values);\n'
             out += '\t\t\t\tbreak;\n'
         out += '\t\t\tdefault:\n'
-        out += '\t\t\t\tid = insertOrUpdateById(db,uri,table,values,DbHelper.COLUMN_ID);\n'
+        out += '\t\t\t\tid = db.insert(table, null, values);\n'
         out += "\t\t}\n"
         out += "\t\tUri resultUri = ContentUris.withAppendedId(uri, id);\n"
         out += "\t\tgetContext().getContentResolver().notifyChange(resultUri, null);\n"
@@ -465,17 +472,17 @@ class Generator:
 
             for v in t["fields"]:
                 varName = v['varName']
-                constVarName = self.generateConstName(varName)
+                constVarName = v['const']
                 constTableName = self.generateConstName(tableName)
                 out += "\t\tcv.put(DbHelper." +constTableName + "_" +  constVarName + ", " + varName +");\n"
             out += "\t\treturn cv;\n"
             out += "\n"
             out += "\t}\n"
-            out += "\n\t------------- getters ------------\n"
+            out += "\n\t//------------- getters ------------\n"
             # generateGetters
             for v in t["fields"]:
                 varName = v['varName']
-                out += "\tpublic " + v['type'] +" get" + self.generateClassName(varName) + "(){\n"
+                out += "\tpublic " + v['type'] + " get" + self.generateClassName(varName) + "(){\n"
                 out += "\t\treturn " + varName + ";\n"
                 out += "\t}\n\n"
 
@@ -496,7 +503,7 @@ class Generator:
         for t in tables:
             tableName = t['name']
             className = self.generateClassName(tableName)
-            out += "import "+ self.pkg + ".data.db.model." + className + ";\n"
+            out += "import " + self.pkg + ".data.db.model." + className + ";\n"
 
         out += "\nprivate static App mInstance;\n"
         out += "private static Context mAppContext;\n\n"
@@ -521,10 +528,11 @@ class Generator:
             tableName = t['name']
             constTableName = self.generateConstName(tableName)
             className = self.generateClassName(tableName)
-            out += "\tpublic static void insert" + className + "( " + className + " value ){\n"
-            out += "\t\tmAppContext.getContentResolver()\n"
+            out += "\tpublic static long insert" + className + "( " + className + " value ){\n"
+            out += "\t\tUri result = mAppContext.getContentResolver()\n"
             out += "\t\t\t.insert(AppContentProvider.CONTENT_URI_"+constTableName + "\n"
             out += "\t\t\t\t, value.buildContentValues());\n"
+            out += "\t\treturn  Long.valueOf( result.getLastPathSegment());\n"
             out += "\t}\n"
 
         out += "}\n"

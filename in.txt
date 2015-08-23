@@ -1,12 +1,21 @@
 folder
 	hashtag String
-	name String
+	name String UNIQUE
+
 users
-	user_id String
+	user_id String UNIQUE
+	name String
 	
 image
-	image_id String
+	image_id String UNIQUE
 	created_time long
 	thumbnail String
 	standard_resolution String
 	caption String
+	user_id int
+
+feed
+	id String UNIQUE
+	image_id int
+	nextUrl String
+	nextMaxId String
